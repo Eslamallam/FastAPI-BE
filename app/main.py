@@ -2,7 +2,7 @@ from fastapi import FastAPI, status, HTTPException
 from scalar_fastapi import get_scalar_api_reference
 
 from typing import Any
-from .schemas import Shipment
+from .schemas import ShipmentRead, ShipmentCreate, ShipmentUpdate
 
 app = FastAPI()
 
@@ -52,55 +52,46 @@ def get_latest_shipment() -> dict[str, Any]:
 
 
 @app.get("/shipment")
-def get_shipment(id: int | None = None) -> dict[str, Any]:
+def get_shipment(id: int) -> ShipmentRead:
     if id not in db:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
 
-    return {"id": id, "details": db[id]}
+    #shipment = db[id]
+    return db[id]
 
 
 @app.post("/shipment")
-def create_shipment(body: Shipment) -> dict[str, Any]:
+def create_shipment(body: ShipmentCreate) -> dict[str, Any]:
     new_id = max(db.keys()) + 1
     db[new_id] = {"content": body.content, "status": "Processing", "weight": body.weight}
     return {"id": new_id, "details": db[new_id]}
 
 
 @app.put("/shipment")
-def update_shipment(id: int, content: str, status: str) -> dict[str, Any]:
+def update_shipment(id: int, body: ShipmentUpdate) -> dict[str, Any]:
     if id not in db:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
 
     db[id] = {
-        "content": content,
-        "status": status,
+        "content": body.content,
+        "status": body.status,
     }
 
     return {"id": id, "details": db[id]}
 
 
 @app.patch("/shipment")
-def patch_shipment(id: int, body: dict[str, Any]) -> dict[str, Any]:
+def patch_shipment(id: int, body: ShipmentUpdate) -> dict[str, Any]:
     if id not in db:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
-
-    shipment = db[id]
-
-    # if content is not None:
-    #     shipment["content"] = content
-    # if status is not None:
-    #     shipment["status"] = status
-
-    shipment.update(body)
-
-    db[id] = shipment
-    return {"id": id, "details": shipment}
+    db[id].update(body.model_dump(exclude_unset=True))
+    return db[id]
 
 
 @app.delete("/shipment")
