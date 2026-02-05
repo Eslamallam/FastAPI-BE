@@ -1,107 +1,104 @@
-from fastapi import FastAPI, status, HTTPException
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, status
 from scalar_fastapi import get_scalar_api_reference
 
-from typing import Any
-from .schemas import ShipmentRead, ShipmentCreate, ShipmentUpdate
+from app.database.models import Shipment, ShipmentStatus
+from app.database.session import SessionDep, create_db_and_tables
 
-app = FastAPI()
+from .schemas import ShipmentCreate, ShipmentRead, ShipmentUpdate
 
-db = {
-    201: {
-        "content": "Laptop",
-        "status": "Delivered",
-        "weight": 2.1,
-    },
-    202: {
-        "content": "Office Chair",
-        "status": "In Transit",
-        "weight": 15.3,
-    },
-    203: {
-        "content": "Monitor",
-        "status": "Delivered",
-        "weight": 4.7,
-    },
-    204: {
-        "content": "Keyboard",
-        "status": "Processing",
-        "weight": 0.8,
-    },
-    205: {
-        "content": "Mouse",
-        "status": "Delivered",
-        "weight": 0.3,
-    },
-    206: {
-        "content": "Desk Lamp",
-        "status": "In Transit",
-        "weight": 1.2,
-    },
-    207: {
-        "content": "Bookshelf",
-        "status": "Processing",
-        "weight": 22.5,
-    },
-}
 
+@asynccontextmanager
+async def lifespan_handler(app: FastAPI):
+    print("Starting up...")
+    create_db_and_tables()
+    yield
+    print("Shutting down...")
+
+
+app = FastAPI(lifespan=lifespan_handler)
 
 @app.get("/shipment/latest")
-def get_latest_shipment() -> dict[str, Any]:
-    latest_id = max(db.keys())
-    return {"id": latest_id, "details": db[latest_id]}
+def get_latest_shipment(session: SessionDep) -> dict[str, Any]:
+    from sqlmodel import select
+    statement = select(Shipment).order_by(Shipment.id.desc()).limit(1)
+    latest_shipment = session.exec(statement).first()
+    if not latest_shipment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No shipments found"
+        )
+    return {"id": latest_shipment.id, "details": latest_shipment}
 
 
 @app.get("/shipment")
-def get_shipment(id: int) -> ShipmentRead:
-    if id not in db:
+def get_shipment(id: int, session: SessionDep) -> ShipmentRead:
+    shipment = session.get(Shipment, id)
+    if not shipment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
-
-    #shipment = db[id]
-    return db[id]
+    return shipment
 
 
 @app.post("/shipment")
-def create_shipment(body: ShipmentCreate) -> dict[str, Any]:
-    new_id = max(db.keys()) + 1
-    db[new_id] = {"content": body.content, "status": "Processing", "weight": body.weight}
-    return {"id": new_id, "details": db[new_id]}
+def create_shipment(body: ShipmentCreate, session: SessionDep) -> dict[str, Any]:
+    new_shipment = Shipment(
+        content=body.content,
+        status=ShipmentStatus.processing,
+        weight=body.weight,
+        destination=body.destination,
+        estimated_delivery=datetime.now() + timedelta(days=3)
+    )
+    session.add(new_shipment)
+    session.commit()
+    session.refresh(new_shipment)
+    return {"id": new_shipment.id, "details": new_shipment}
 
 
 @app.put("/shipment")
-def update_shipment(id: int, body: ShipmentUpdate) -> dict[str, Any]:
-    if id not in db:
+def update_shipment(id: int, body: ShipmentUpdate, session: SessionDep) -> dict[str, Any]:
+    shipment = session.get(Shipment, id)
+    if not shipment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
 
-    db[id] = {
-        "content": body.content,
-        "status": body.status,
-    }
+    shipment.sqlmodel_update(body.model_dump(exclude_none=True))
+    session.add(shipment)
+    session.commit()
+    session.refresh(shipment)
 
-    return {"id": id, "details": db[id]}
+    return {"id": id, "details": shipment}
 
 
 @app.patch("/shipment")
-def patch_shipment(id: int, body: ShipmentUpdate) -> dict[str, Any]:
-    if id not in db:
+def patch_shipment(id: int, body: ShipmentUpdate, session: SessionDep) -> dict[str, Any]:
+    shipment = session.get(Shipment, id)
+    if not shipment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
-    db[id].update(body.model_dump(exclude_unset=True))
-    return db[id]
+    shipment.sqlmodel_update(body.model_dump(exclude_none=True))
+    session.add(shipment)
+    session.commit()
+    session.refresh(shipment)
+    return {"id": id, "details": shipment}
 
 
 @app.delete("/shipment")
-def delete_shipment(id: int) -> dict[str, Any]:
-    if id not in db:
+def delete_shipment(id: int, session: SessionDep) -> dict[str, Any]:
+    shipment = session.get(Shipment, id)
+    if not shipment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found"
         )
 
-    deleted_shipment = db.pop(id)
+    deleted_shipment = shipment
+    session.delete(shipment)
+    session.commit()
     return {"id": id, "details": deleted_shipment}
 
 
